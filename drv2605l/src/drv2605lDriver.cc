@@ -240,11 +240,18 @@ void Driver::setPulseWave(uint8_t delay) {
     // NOTE: 10s of ms
     setWaveform(delay, ii, true);
   }
+  // setWaveform(3, 0);
+  // setWaveform(delay, 1, true);
+  // setWaveform(0, 2);
 }
 
-void Driver::fireWaveform() { writeRegField(DRV260X_GO, DRV260X_GO_BIT, 0, 0); }
+void Driver::startPlayback() {
+  writeRegField(DRV260X_GO, DRV260X_GO_BIT, 0, 0);
+}
 
 void Driver::stopPlayback() { writeRegField(DRV260X_GO, 0, 0, 0); }
+
+bool Driver::isPlaying() { return readRegField(DRV260X_GO, 0, 0) == 1; }
 
 void Driver::initHaptics(bool runAutoCalib) {
   if (ioctl(i2cBusFD, I2C_SLAVE, address) < 0) {

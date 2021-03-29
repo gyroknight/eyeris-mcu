@@ -32,8 +32,9 @@ class Driver {
   void setWaveform(uint8_t value, uint8_t idx, bool delay = false);
   void printWaveform();
   void setPulseWave(uint8_t delay);
-  void fireWaveform();
+  void startPlayback();
   void stopPlayback();
+  bool isPlaying();
 
  private:
   void initHaptics(bool runAutoCalib);

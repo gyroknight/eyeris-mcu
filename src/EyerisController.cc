@@ -1,6 +1,9 @@
 #include "EyerisController.hh"
 
+#include <unistd.h>
+
 #include <array>
+#include <chrono>
 #include <iostream>
 
 namespace {
@@ -93,11 +96,22 @@ uint16_t EyerisController::getDistance(size_t ii) { return *distances[ii]; }
 void EyerisController::hapticsThreadFunc() {
   while (running) {
     uint16_t distance = *distances[0];
+    auto startTime = std::chrono::steady_clock::now();
     if (distance < sensMaxDist) {
-      haptics.setPulseWave(distance * maxDelay / sensMaxDist);
-      haptics.fireWaveform();
+      // haptics.setPulseWave(100);
+      while (std::chrono::duration_cast<std::chrono::seconds>(
+                 std::chrono::steady_clock::now() - startTime)
+                 .count() < 2) {
+        haptics.setPulseWave(distance * maxDelay / sensMaxDist);
+        haptics.startPlayback();
+        bool waveRunning;
+        do {
+          waveRunning = haptics.isPlaying();
+          usleep(1);
+        } while (waveRunning);
+      }
     } else {
-      haptics.stopPlayback();
+      usleep(1);
     }
   }
 }
