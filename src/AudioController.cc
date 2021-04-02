@@ -56,7 +56,7 @@ AudioController::~AudioController() {
 
 int AudioController::loadFile(const std::string& path) {
   std::shared_ptr<std::vector<uint8_t>> buffer;
-  if (soundFiles.contains(path)) {
+  if (soundFiles.find(path) != soundFiles.end()) {
     // File is already in map
     buffer = soundFiles[path];
   } else {

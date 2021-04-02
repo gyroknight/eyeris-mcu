@@ -5,8 +5,11 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
+
+#include "Gobbledegook.h"
 
 namespace {
 // Number of distance sensors. If changed, make sure to adjust pins and
@@ -24,6 +27,31 @@ constexpr uint8_t sensPulsePeriodFinalRange = 14;  // default is 10 PCLKs
 constexpr uint16_t sensErrorDistVal = UINT16_MAX;
 constexpr uint16_t sensMaxDist = 280;
 constexpr uint8_t maxDelay = 50;
+
+//
+// Constants
+//
+
+// Maximum time to wait for any single async process to timeout during
+// initialization
+static const int kMaxAsyncInitTimeoutMS = 30 * 1000;
+
+//
+// Server data values
+//
+
+// Eyeris test string
+static std::string eyerisHello("Hello from Eyeris!");
+
+//
+// Logging
+//
+
+enum LogLevel { Debug, Verbose, Normal, ErrorsOnly };
+
+// Our log level - defaulted to 'Normal' but can be modified via
+// command-line options
+LogLevel logLevel = Debug;
 }  // namespace
 
 EyerisController::EyerisController() : running(false) {
@@ -56,6 +84,44 @@ EyerisController::EyerisController() : running(false) {
   }
 
   haptics.enableLRAEffects();
+
+  // Register our loggers
+  ggkLogRegisterDebug(LogDebug);
+  ggkLogRegisterInfo(LogInfo);
+  ggkLogRegisterStatus(LogStatus);
+  ggkLogRegisterWarn(LogWarn);
+  ggkLogRegisterError(LogError);
+  ggkLogRegisterFatal(LogFatal);
+  ggkLogRegisterAlways(LogAlways);
+  ggkLogRegisterTrace(LogTrace);
+
+  // Start the server's async processing
+  //
+  // This starts the server on a thread and begins the initialization process
+  //
+  // !!!IMPORTANT!!!
+  //
+  //     This first parameter (the service name) must match tha name configured
+  //     in the D-Bus permissions. See the Readme.md file for more information.
+  //
+
+  std::function<const void*(const char* pName)> dataGetterFunc =
+      [this](const char* pName) -> const void* {
+    return this->dataGetter(pName);
+  };
+  std::function<int(const char* pName, const void* pData)> dataSetterFunc =
+      [this](const char* pName, const void* pData) -> int {
+    return this->dataSetter(pName, pData);
+  };
+
+  if (!ggkStart("eyeris",
+                "Nordic UART Test Server",  // dashes in name not allowed
+                "Nordic UART Test",
+                dataGetterFunc.target<const void*(const char*)>(),
+                dataSetterFunc.target<int(const char*, const void*)>(),
+                kMaxAsyncInitTimeoutMS)) {
+    std::cout << "Failed to start BLE server" << std::endl;
+  }
 }
 
 EyerisController::~EyerisController() { stop(); }
@@ -79,6 +145,8 @@ void EyerisController::start() {
           std::thread(&EyerisController::distSenseThreadFunc, this);
       audioAlertThread =
           std::thread(&EyerisController::audioAlertThreadFunc, this);
+      bluetoothThread =
+          std::thread(&EyerisController::bluetoothThreadFunc, this);
     } catch (std::system_error& ee) {
       std::cerr << "Failed to start threads";
       stop();
@@ -94,6 +162,7 @@ void EyerisController::stop() {
   if (hapticsThread.joinable()) hapticsThread.join();
   if (distSenseThread.joinable()) distSenseThread.join();
   if (audioAlertThread.joinable()) audioAlertThread.join();
+  if (bluetoothThread.joinable()) bluetoothThread.join();
 }
 
 uint16_t EyerisController::getDistance(size_t ii) {
@@ -189,4 +258,115 @@ void EyerisController::distSenseThreadFunc() {
 void EyerisController::audioAlertThreadFunc() {
   while (running) {
   }
+}
+
+void EyerisController::bluetoothThreadFunc() {
+  while (running) {
+    if (ggkGetServerRunState() < EStopping) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+      ggkNofifyUpdatedCharacteristic("/com/eyeris/Nordic_UART_Service/UART_TX");
+    }
+  }
+
+  ggkTriggerShutdown();
+}
+
+// Our full set of logging methods (we just log to stdout)
+//
+// NOTE: Some methods will only log if the appropriate `logLevel` is set
+void EyerisController::LogDebug(const char* pText) {
+  if (logLevel <= Debug) {
+    std::cout << "  DEBUG: " << pText << std::endl;
+  }
+}
+void EyerisController::LogInfo(const char* pText) {
+  if (logLevel <= Verbose) {
+    std::cout << "   INFO: " << pText << std::endl;
+  }
+}
+void EyerisController::LogStatus(const char* pText) {
+  if (logLevel <= Normal) {
+    std::cout << " STATUS: " << pText << std::endl;
+  }
+}
+void EyerisController::LogWarn(const char* pText) {
+  std::cout << "WARNING: " << pText << std::endl;
+}
+void EyerisController::LogError(const char* pText) {
+  std::cout << "!!ERROR: " << pText << std::endl;
+}
+void EyerisController::LogFatal(const char* pText) {
+  std::cout << "**FATAL: " << pText << std::endl;
+}
+void EyerisController::LogAlways(const char* pText) {
+  std::cout << "..EyerisController::Log..: " << pText << std::endl;
+}
+void EyerisController::LogTrace(const char* pText) {
+  std::cout << "-Trace-: " << pText << std::endl;
+}
+
+//
+// Server data management
+//
+
+// Called by the server when it wants to retrieve a named value
+//
+// This method conforms to `GGKServerDataGetter` and is passed to the server via
+// our call to `ggkStart()`.
+//
+// The server calls this method from its own thread, so we must ensure our
+// implementation is thread-safe. In our case, we're simply sending over stored
+// values, so we don't need to take any additional steps to ensure
+// thread-safety.
+const void* EyerisController::dataGetter(const char* pName) {
+  if (nullptr == pName) {
+    LogError("NULL name sent to server data getter");
+    return nullptr;
+  }
+
+  std::string strName = pName;
+
+  if (strName == "uart_tx") {
+    return eyerisHello.c_str();
+  }
+
+  LogWarn((std::string("Unknown name for server data getter request: '") +
+           pName + "'")
+              .c_str());
+  return nullptr;
+}
+
+// Called by the server when it wants to update a named value
+//
+// This method conforms to `GGKServerDataSetter` and is passed to the server via
+// our call to `ggkStart()`.
+//
+// The server calls this method from its own thread, so we must ensure our
+// implementation is thread-safe. In our case, we're simply sending over stored
+// values, so we don't need to take any additional steps to ensure
+// thread-safety.
+int EyerisController::dataSetter(const char* pName, const void* pData) {
+  if (nullptr == pName) {
+    LogError("NULL name sent to server data setter");
+    return 0;
+  }
+  if (nullptr == pData) {
+    LogError("NULL pData sent to server data setter");
+    return 0;
+  }
+
+  std::string strName = pName;
+
+  if (strName == "uart_rx") {
+    const char* dataStr = static_cast<const char*>(pData);
+    LogDebug((std::string("Server received: ") + std::string(dataStr)).c_str());
+    return 1;
+  }
+
+  LogWarn((std::string("Unknown name for server data setter request: '") +
+           pName + "'")
+              .c_str());
+
+  return 0;
 }
