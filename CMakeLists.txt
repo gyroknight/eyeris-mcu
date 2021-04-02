@@ -13,6 +13,7 @@ find_package(Threads REQUIRED)
 find_package(ALSA REQUIRED)
 
 add_subdirectory(drv2605l)
+add_subdirectory(gobbledegook)
 add_subdirectory(vl53l0x)
 
 add_executable(eyeris "")
@@ -24,7 +25,7 @@ target_sources(eyeris
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cc"
 )
 
-target_link_libraries(eyeris drv2605l-user-driver vl53l0x Threads::Threads wiringPi ALSA::ALSA)
+target_link_libraries(eyeris drv2605l-user-driver ggk vl53l0x Threads::Threads wiringPi ALSA::ALSA)
 
 target_compile_options(eyeris
     PUBLIC -Wall
