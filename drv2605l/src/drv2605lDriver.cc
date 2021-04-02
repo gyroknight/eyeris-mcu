@@ -107,8 +107,9 @@ constexpr uint8_t DRV260X_BEMF_GAIN_2 = (2 << 0);
 constexpr uint8_t DRV260X_BEMF_GAIN_3 = (3 << 0);
 
 // Control 1 register
-constexpr uint8_t DRV260X_AC_CPLE_EN    = (1 << 5);
-constexpr uint8_t DRV260X_STARTUP_BOOST = (1 << 7);
+constexpr uint8_t DRV260X_AC_CPLE_EN      = (1 << 5);
+constexpr uint8_t DRV260X_STARTUP_BOOST   = (1 << 7);
+constexpr uint8_t DRV260X_DRIVE_TIME_MASK = 0x1F;
 
 // Control 3 register
 constexpr uint8_t DRV260X_LRA_OPEN_LOOP     = (1 << 0);
@@ -127,13 +128,13 @@ std::vector<std::pair<uint8_t, uint8_t>> drv2605lLRACalRegs = {
     {DRV260X_MODE, DRV260X_AUTO_CAL},
     {DRV260X_CTRL3, DRV260X_NG_THRESH_2},
     {DRV260X_FEEDBACK_CTRL, DRV260X_FB_REG_LRA_MODE | DRV260X_BRAKE_FACTOR_4X |
-                                DRV260X_LOOP_GAIN_HIGH}};
+                                DRV260X_LOOP_GAIN_MED}};
 }  // namespace
 
 using namespace drv2605l;
 
 Driver::Driver(long address, uint32_t ratedVoltage, uint32_t overdriveVoltage,
-               bool runAutoCalib)
+               uint8_t driveTime, bool runAutoCalib)
     : address(address),
       ratedVoltage(ratedVoltage),
       overdriveVoltage(overdriveVoltage),
@@ -159,7 +160,7 @@ Driver::Driver(long address, uint32_t ratedVoltage, uint32_t overdriveVoltage,
 
   if (!foundBus) throw std::runtime_error("Failed to find I2C bus");
 
-  initHaptics(runAutoCalib);
+  initHaptics(runAutoCalib, driveTime);
 }
 
 Driver::~Driver() { close(i2cBusFD); }
@@ -232,15 +233,15 @@ void Driver::printWaveform() {
 }
 
 void Driver::setPulseWave(uint8_t delay) {
-  for (uint8_t ii = 0; ii < 8; ii += 2) {
+  for (uint8_t ii = 0; ii < 3; ii += 2) {
     setWaveform(3, ii);
   }
 
-  for (uint8_t ii = 1; ii < 8; ii += 2) {
+  for (uint8_t ii = 1; ii < 4; ii += 2) {
     // NOTE: 10s of ms
     setWaveform(delay, ii, true);
   }
-  // setWaveform(3, 0);
+  setWaveform(4, 0);
   // setWaveform(delay, 1, true);
   // setWaveform(0, 2);
 }
@@ -253,7 +254,7 @@ void Driver::stopPlayback() { writeRegField(DRV260X_GO, 0, 0, 0); }
 
 bool Driver::isPlaying() { return readRegField(DRV260X_GO, 0, 0) == 1; }
 
-void Driver::initHaptics(bool runAutoCalib) {
+void Driver::initHaptics(bool runAutoCalib, uint8_t driveTime) {
   if (ioctl(i2cBusFD, I2C_SLAVE, address) < 0) {
     throw std::runtime_error("Failed to set DRV2605L I2C address");
   }
@@ -297,6 +298,12 @@ void Driver::initHaptics(bool runAutoCalib) {
     throw std::runtime_error(std::string("Failed to write overdrive voltage ")
                                  .append(std::to_string(overdriveVoltage)));
 
+  // Set initial drive time guess
+  writeSuccess = writeRegField(DRV260X_CTRL1, driveTime, 0, 4);
+
+  // Set actuator to LRA
+  writeSuccess = writeRegField(DRV260X_FEEDBACK_CTRL, 1, 7, 7);
+
   // Run LRA autocalibration sequence (requires explicit support by the
   // actuator)
   if (runAutoCalib) {
@@ -322,9 +329,6 @@ void Driver::initHaptics(bool runAutoCalib) {
     if (readRegField(DRV260X_STATUS, 3, 3))
       std::cout << "Warning: actuator auto-calibration failed" << std::endl;
   }
-
-  // Set actuator to LRA
-  writeSuccess = writeRegField(DRV260X_FEEDBACK_CTRL, 1, 7, 7);
 
   // Disable ROM effects library
   writeSuccess = writeReg(DRV260X_LIB_SEL, DRV260X_LIB_SEL_RAM);
@@ -380,8 +384,4 @@ uint8_t Driver::getBitmask(uint8_t startBit, uint8_t endBit) {
   mask >>= (7 - (endBit - startBit));
   mask <<= startBit;
   return mask;
-}
-
-uint8_t Driver::calculateVoltage(uint32_t voltage) {
-  return voltage * 255 / 5600;
 }

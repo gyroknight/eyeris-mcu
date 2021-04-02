@@ -5,6 +5,7 @@
 #include <thread>
 #include <vector>
 
+#include "AudioController.hh"
 #include "VL53L0X.hpp"
 #include "drv2605lDriver.hh"
 
@@ -20,6 +21,7 @@ class EyerisController {
  private:
   void hapticsThreadFunc();
   void distSenseThreadFunc();
+  void audioAlertThreadFunc();
 
   std::vector<std::unique_ptr<VL53L0X>> distSensors;
   std::vector<std::unique_ptr<std::atomic_uint16_t>> distances;
@@ -27,6 +29,8 @@ class EyerisController {
   std::atomic_bool running;
   std::thread hapticsThread;
   std::thread distSenseThread;
+  std::thread audioAlertThread;
+  AudioController audioController;
 };
 
 #endif  // __EYERIS_H__

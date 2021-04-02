@@ -1,10 +1,28 @@
 #include <unistd.h>
+#include <wiringPi.h>
 
 #include <iostream>
 
 #include "EyerisController.hh"
 
+namespace {
+constexpr int buckEnable = 13;
+constexpr int speakerEnable = 25;
+}  // namespace
+
 int main(int, char*[]) {
+  // Set up enable pins
+  wiringPiSetup();
+  pinMode(buckEnable, OUTPUT);
+  pinMode(speakerEnable, OUTPUT);
+  // Reset sequence (in case they're still on)
+  digitalWrite(buckEnable, false);
+  digitalWrite(speakerEnable, false);
+  usleep(5000);
+  digitalWrite(buckEnable, true);
+  digitalWrite(speakerEnable, true);
+  usleep(5000);
+
   EyerisController controller;
 
   controller.start();

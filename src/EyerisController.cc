@@ -4,13 +4,15 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <iostream>
+#include <stdexcept>
 
 namespace {
 // Number of distance sensors. If changed, make sure to adjust pins and
 // addresses accordingly (i.e. to match size).
 constexpr int SENSOR_COUNT = 3;
-constexpr std::array<uint8_t, SENSOR_COUNT> PINS{25, 27, 21};
+constexpr std::array<uint8_t, SENSOR_COUNT> PINS{4, 20, 27};
 constexpr std::array<uint8_t, SENSOR_COUNT> ADDRESSES{
     VL53L0X_ADDRESS_DEFAULT + 2, VL53L0X_ADDRESS_DEFAULT + 4,
     VL53L0X_ADDRESS_DEFAULT + 6};
@@ -30,9 +32,9 @@ EyerisController::EyerisController() : running(false) {
     distSensors.back()->powerOff();
   }
 
-  try {
-    // Init sensor, set timeout and address
-    for (size_t ii = 0; ii < distSensors.size(); ii++) {
+  // Init sensor, set timeout and address
+  for (size_t ii = 0; ii < distSensors.size(); ii++) {
+    try {
       distSensors[ii]->initialize();
       distSensors[ii]->setTimeout(sensTimeout);
       distSensors[ii]->setMeasurementTimingBudget(sensMeasureTimingBudgetUs);
@@ -42,10 +44,10 @@ EyerisController::EyerisController() : running(false) {
                                            sensPulsePeriodPreRange);
       distSensors[ii]->setVcselPulsePeriod(VcselPeriodFinalRange,
                                            sensPulsePeriodFinalRange);
+    } catch (const std::exception& error) {
+      std::cout << "Failed to initialize sensor " << ii << ", removing...";
+      distSensors[ii].reset();
     }
-  } catch (const std::exception& error) {
-    std::cerr << "Sensor init error: " << error.what();
-    throw std::runtime_error("Failed to intialize all sensors");
   }
 
   for (size_t ii = 0; ii < distSensors.size(); ii++) {
@@ -63,7 +65,7 @@ void EyerisController::start() {
     running = true;
     for (size_t ii = 0; ii < distSensors.size(); ii++) {
       try {
-        distSensors[ii]->startContinuous();
+        if (distSensors[ii]) distSensors[ii]->startContinuous();
       } catch (const std::exception& error) {
         std::cerr << "Failed to start continuous read mode on sensor " << ii
                   << " with reason: " << error.what();
@@ -75,6 +77,8 @@ void EyerisController::start() {
       hapticsThread = std::thread(&EyerisController::hapticsThreadFunc, this);
       distSenseThread =
           std::thread(&EyerisController::distSenseThreadFunc, this);
+      audioAlertThread =
+          std::thread(&EyerisController::audioAlertThreadFunc, this);
     } catch (std::system_error& ee) {
       std::cerr << "Failed to start threads";
       stop();
@@ -89,29 +93,67 @@ void EyerisController::stop() {
   running = false;
   if (hapticsThread.joinable()) hapticsThread.join();
   if (distSenseThread.joinable()) distSenseThread.join();
+  if (audioAlertThread.joinable()) audioAlertThread.join();
 }
 
-uint16_t EyerisController::getDistance(size_t ii) { return *distances[ii]; }
+uint16_t EyerisController::getDistance(size_t ii) {
+  try {
+    return *distances.at(ii);
+  } catch (std::out_of_range& ee) {
+    return 0;
+  }
+}
 
 void EyerisController::hapticsThreadFunc() {
   while (running) {
-    uint16_t distance = *distances[0];
-    auto startTime = std::chrono::steady_clock::now();
-    if (distance < sensMaxDist) {
-      // haptics.setPulseWave(100);
-      while (std::chrono::duration_cast<std::chrono::seconds>(
-                 std::chrono::steady_clock::now() - startTime)
-                 .count() < 2) {
-        haptics.setPulseWave(distance * maxDelay / sensMaxDist);
-        haptics.startPlayback();
+    for (uint8_t ii = 0; ii < distances.size(); ii++) {
+      uint16_t distance = *distances[ii];
+      auto startTime = std::chrono::steady_clock::now();
+      if (distance < sensMaxDist) {
+        // Direction indicator
         bool waveRunning;
+        uint8_t indicatorEffect = 64;
+        switch (ii) {
+          case 0:
+            indicatorEffect = 4;  // Sharp click, 100%
+            break;
+          case 1:
+            indicatorEffect = 10;  // Double click, 100%;
+            break;
+          case 2:
+            indicatorEffect = 12;  // Triple click, 100%
+            break;
+          default:
+            std::cout << "Unsupported sensor " << ii << std::endl;
+        }
+        haptics.setWaveform(indicatorEffect, 0);
+        haptics.setWaveform(50, 1,
+                            true);  // wait 500ms before starting distance wave
+        haptics.setWaveform(0, 2);
+        haptics.startPlayback();
         do {
           waveRunning = haptics.isPlaying();
           usleep(1);
         } while (waveRunning);
+
+        while (std::chrono::duration_cast<std::chrono::seconds>(
+                   std::chrono::steady_clock::now() - startTime)
+                       .count() < 4 &&
+               distance < sensMaxDist) {
+          haptics.setPulseWave(distance * maxDelay / sensMaxDist);
+          haptics.startPlayback();
+          do {
+            waveRunning = haptics.isPlaying();
+            usleep(1);
+          } while (waveRunning);
+
+          distance = *distances[ii];  // Fetch new distance info
+        }
+
+        usleep(500000);  // wait 500ms before moving to next direction
+      } else {
+        usleep(1);
       }
-    } else {
-      usleep(1);
     }
   }
 }
@@ -121,21 +163,30 @@ void EyerisController::distSenseThreadFunc() {
     for (size_t ii = 0; ii < distSensors.size(); ii++) {
       uint16_t distance;
       try {
-        distance = distSensors[ii]->readRangeContinuousMillimeters();
+        distance = distSensors[ii]
+                       ? distSensors[ii]->readRangeContinuousMillimeters()
+                       : sensErrorDistVal;
       } catch (const std::exception& error) {
         std::cerr << "Failed to read sensor " << ii
                   << " with reason: " << error.what();
         distance = sensErrorDistVal;
       }
 
-      if (distSensors[ii]->timeoutOccurred())
+      if (distance == sensErrorDistVal)
+        continue;
+      else if (distSensors[ii]->timeoutOccurred())
         std::cerr << "Timeout occurred on sensor " << ii;
-      else if (distance != sensErrorDistVal)
+      else
         *distances[ii] = distance;
     }
   }
 
   for (std::unique_ptr<VL53L0X>& ss : distSensors) {
     ss->stopContinuous();
+  }
+}
+
+void EyerisController::audioAlertThreadFunc() {
+  while (running) {
   }
 }
