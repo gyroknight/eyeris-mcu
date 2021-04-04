@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <boost/fiber/barrier.hpp>
+#include <chrono>
 #include <thread>
 #include <vector>
 
@@ -11,6 +12,8 @@
 #include "drv2605lDriver.hh"
 
 enum SoundSet { Default, Variant1 };
+
+enum Alert { None, OneFiveM, TwoM };
 
 class EyerisController {
  public:
@@ -26,9 +29,13 @@ class EyerisController {
   void hapticsThreadFunc();
   void distSenseThreadFunc();
   void audioAlertThreadFunc();
+  Alert getAlert(uint16_t distance);
+  void playAlert(uint8_t idx, Alert alert);
 
   std::vector<std::unique_ptr<VL53L0X>> distSensors;
   std::vector<std::unique_ptr<std::atomic_uint16_t>> distances;
+  std::vector<Alert> lastAlert;
+  std::vector<std::chrono::time_point<std::chrono::steady_clock>> lastUpdate;
   drv2605l::Driver haptics;
   std::atomic_bool running;
   std::thread hapticsThread;

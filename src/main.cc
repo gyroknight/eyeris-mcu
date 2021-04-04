@@ -16,7 +16,7 @@ namespace {
 constexpr int buckEnable = 13;
 constexpr int speakerEnable = 25;
 constexpr int SENSOR_COUNT = 3;
-constexpr uint16_t sensErrorDistVal = UINT16_MAX;
+constexpr uint16_t sensMaxDist = 2000;
 
 //
 // Constants
@@ -30,8 +30,8 @@ static const int kMaxAsyncInitTimeoutMS = 30 * 1000;
 // Server data values
 //
 
-static std::array<uint16_t, SENSOR_COUNT> distances{
-    sensErrorDistVal, sensErrorDistVal, sensErrorDistVal};
+static std::array<uint16_t, SENSOR_COUNT> distances{sensMaxDist, sensMaxDist,
+                                                    sensMaxDist};
 static std::stringstream alertStream;
 static std::string alertString;
 
@@ -188,6 +188,10 @@ int main(int, char*[]) {
 
   controller.start();
 
+  // Setup our signal handlers
+  signal(SIGINT, signalHandler);
+  signal(SIGTERM, signalHandler);
+
   // Register our loggers
   ggkLogRegisterDebug(LogDebug);
   ggkLogRegisterInfo(LogInfo);
@@ -208,31 +212,30 @@ int main(int, char*[]) {
   //     in the D-Bus permissions. See the Readme.md file for more information.
   //
 
-  // if (!ggkStart("eyeris",
-  //               "Nordic UART Test Server",  // dashes in name not allowed
-  //               "Nordic UART Test", dataGetter, dataSetter,
-  //               kMaxAsyncInitTimeoutMS)) {
-  //   std::cout << "Failed to start BLE server" << std::endl;
-  // }
+  if (!ggkStart("eyeris",
+                "eyeris",  // dashes in name not allowed
+                "eyeris", dataGetter, dataSetter, kMaxAsyncInitTimeoutMS)) {
+    std::cout << "Failed to start BLE server" << std::endl;
+  }
 
   while (true) {
     for (short ii = 0; ii < SENSOR_COUNT; ii++) {
       distances[ii] = controller.getDistance(ii);
     }
 
-    // if (ggkGetServerRunState() < EStopping) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    if (ggkGetServerRunState() < EStopping) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    //   for (uint16_t distance : distances) {
-    //     if (distance > sensErrorDistVal) {
-    //       ggkNofifyUpdatedCharacteristic(
-    //           "/com/eyeris/Nordic_UART_Service/UART_TX");
-    //       break;
-    //     }
-    //   }
-    // }
+      for (uint16_t distance : distances) {
+        if (distance < sensMaxDist) {
+          ggkNofifyUpdatedCharacteristic(
+              "/com/eyeris/Nordic_UART_Service/UART_TX");
+          break;
+        }
+      }
+    }
 
-    // if (ggkGetServerRunState() == EStopped) break;
+    if (ggkGetServerRunState() == EStopped) break;
   }
 
   // Return the final server health status as a success (0) or error (-1)

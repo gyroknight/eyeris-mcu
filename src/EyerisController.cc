@@ -10,6 +10,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -26,7 +27,7 @@ constexpr float sensSigRateLim = 0.1;              // default is 0.25 MCPS
 constexpr uint8_t sensPulsePeriodPreRange = 18;    // default is 14 PCLKs
 constexpr uint8_t sensPulsePeriodFinalRange = 14;  // default is 10 PCLKs
 constexpr uint16_t sensErrorDistVal = UINT16_MAX;
-constexpr uint16_t sensMaxDist = 1500;
+constexpr uint16_t sensMaxDist = 2000;
 constexpr uint16_t sensMinDist = 1000;
 constexpr uint8_t maxDelay = 50;
 constexpr uint8_t numFeedback = 2;
@@ -36,6 +37,13 @@ const std::vector<std::string> soundFilenames{
 const std::vector<std::string> soundFilenames1{
     "resources/1.5m_1.wav", "resources/2m_1.wav", "resources/above_1.wav",
     "resources/left_1.wav", "resources/right_1.wav"};
+constexpr size_t oneFiveMSoundIdx = 0;
+constexpr size_t twoMSoundIdx = 1;
+constexpr size_t aboveSoundIdx = 2;
+constexpr size_t leftSoundIdx = 3;
+constexpr size_t rightSoundIdx = 4;
+std::unordered_map<SoundSet, std::vector<std::string>> soundFilenamesMap{
+    {Default, soundFilenames}, {Variant1, soundFilenames1}};
 }  // namespace
 
 EyerisController::EyerisController()
@@ -67,6 +75,11 @@ EyerisController::EyerisController()
     distances.emplace_back(
         std::make_unique<std::atomic_uint16_t>(sensErrorDistVal));
   }
+
+  lastAlert.assign({None, None, None});
+  lastUpdate.assign({std::chrono::steady_clock::now(),
+                     std::chrono::steady_clock::now(),
+                     std::chrono::steady_clock::now()});
 
   haptics.enableLRAEffects();
 }
@@ -196,6 +209,8 @@ void EyerisController::distSenseThreadFunc() {
       else
         *distances[ii] = distance;
     }
+
+    std::this_thread::sleep_for(std::chrono::microseconds(500));
   }
 
   for (std::unique_ptr<VL53L0X>& ss : distSensors) {
@@ -216,7 +231,57 @@ void EyerisController::audioAlertThreadFunc() {
     for (uint8_t ii = 0; ii < distances.size(); ii++) {
       uint16_t distance = *distances[ii];
       feedbackBarrier.wait();
-      audioController.playFile("resources/1.5m.wav");
+      Alert nextAlert = getAlert(distance);
+      if (nextAlert != None &&
+          (nextAlert != lastAlert[ii] ||
+           std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::steady_clock::now() - lastUpdate[ii])
+                   .count() < 5)) {
+        playAlert(ii, nextAlert);
+      }
+
+      lastAlert[ii] = nextAlert;
     }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
   }
+}
+
+Alert EyerisController::getAlert(uint16_t distance) {
+  if (distance <= 1500) {
+    return OneFiveM;
+  } else if (distance <= 2000) {
+    return TwoM;
+  } else {
+    return None;
+  }
+}
+
+void EyerisController::playAlert(uint8_t idx, Alert alert) {
+  switch (idx) {
+    case 0:
+      audioController.playFile(soundFilenamesMap[soundSet][rightSoundIdx]);
+      break;
+    case 1:
+      audioController.playFile(soundFilenamesMap[soundSet][aboveSoundIdx]);
+      break;
+    case 2:
+      audioController.playFile(soundFilenamesMap[soundSet][leftSoundIdx]);
+      break;
+    default:
+      return;
+  }
+
+  switch (alert) {
+    case OneFiveM:
+      audioController.playFile(soundFilenamesMap[soundSet][oneFiveMSoundIdx]);
+      break;
+    case TwoM:
+      audioController.playFile(soundFilenamesMap[soundSet][twoMSoundIdx]);
+      break;
+    default:
+      std::cout << "Invalid alert to play" << std::endl;
+  }
+
+  lastUpdate[idx] = std::chrono::steady_clock::now();
 }
