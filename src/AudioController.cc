@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <ios>
 #include <iostream>
@@ -24,8 +25,41 @@ constexpr uint8_t formatSize = sizeof(int16_t);
 constexpr int waveChunkHdrSize = 8;
 }  // namespace
 
-AudioController::AudioController() : pcmHandle(nullptr), hwParams(nullptr) {
-  snd_pcm_hw_params_alloca(&hwParams);
+AudioController::AudioController()
+    : pcmHandle(nullptr), hwParams(nullptr), numChannels(0), sampleRate(0) {
+  int ret;
+  if ((ret = snd_pcm_open(&pcmHandle, pcmDevice, SND_PCM_STREAM_PLAYBACK, 0))) {
+    std::cout << "Failed to open PCM handle: " << snd_strerror(ret)
+              << std::endl;
+    return;
+  }
+  if ((ret = snd_pcm_nonblock(pcmHandle, 0))) {
+    std::cout << "Failed to set PCM to blocking mode: " << snd_strerror(ret)
+              << std::endl;
+    return;
+  }
+
+  snd_pcm_hw_params_malloc(&hwParams);
+
+  if ((ret = snd_pcm_hw_params_any(pcmHandle, hwParams))) {
+    std::cout << "Failed to fill params for PCM: " << snd_strerror(ret)
+              << std::endl;
+    return;
+  }
+
+  if ((ret = snd_pcm_hw_params_set_access(pcmHandle, hwParams,
+                                          SND_PCM_ACCESS_RW_INTERLEAVED))) {
+    std::cout << "Failed to interleaved mode: " << snd_strerror(ret)
+              << std::endl;
+    return;
+  }
+
+  if ((ret =
+           snd_pcm_hw_params_set_format(pcmHandle, hwParams, defaultFormat))) {
+    std::cout << "Failed to set sound format to s16l: " << snd_strerror(ret)
+              << std::endl;
+    return;
+  }
 }
 
 AudioController::~AudioController() {
@@ -38,78 +72,66 @@ void AudioController::playFile(const std::string& path) {
     std::shared_ptr<std::vector<uint8_t>> file = soundFiles[path];
     waveHeader& header = *reinterpret_cast<waveHeader*>(file->data());
     int ret;
-    if ((ret =
-             snd_pcm_open(&pcmHandle, pcmDevice, SND_PCM_STREAM_PLAYBACK, 0))) {
-      std::cout << "Failed to open PCM handle: " << snd_strerror(ret)
-                << std::endl;
-      return;
+
+    if (numChannels != header.numChannels || sampleRate != header.sampleRate) {
+      if ((ret = snd_pcm_hw_params_set_channels(pcmHandle, hwParams,
+                                                header.numChannels))) {
+        std::cout << "Failed to set channel count to " << header.numChannels
+                  << ": " << snd_strerror(ret) << std::endl;
+        return;
+      }
+
+      ret = snd_pcm_hw_params_set_rate_near(
+          pcmHandle, hwParams,
+          reinterpret_cast<unsigned int*>(
+              const_cast<uint32_t*>(&header.sampleRate)),
+          0);
+      if (ret) {
+        std::cout << "Failed to set sample rate: " << snd_strerror(ret)
+                  << std::endl;
+        return;
+      }
+
+      if ((ret = snd_pcm_hw_params(pcmHandle, hwParams))) {
+        std::cout << "Failed to set hardware params: " << snd_strerror(ret)
+                  << std::endl;
+        return;
+      }
+
+      numChannels = header.numChannels;
+      sampleRate = header.sampleRate;
     }
 
-    if ((ret = snd_pcm_hw_params_any(pcmHandle, hwParams))) {
-      std::cout << "Failed to fill params for PCM: " << snd_strerror(ret)
-                << std::endl;
-      return;
-    }
-
-    if ((ret = snd_pcm_hw_params_set_access(pcmHandle, hwParams,
-                                            SND_PCM_ACCESS_RW_INTERLEAVED))) {
-      std::cout << "Failed to interleaved mode: " << snd_strerror(ret)
-                << std::endl;
-      return;
-    }
-
-    if ((ret = snd_pcm_hw_params_set_format(pcmHandle, hwParams,
-                                            defaultFormat))) {
-      std::cout << "Failed to set sound format to s16l: " << snd_strerror(ret)
-                << std::endl;
-      return;
-    }
-
-    if ((ret = snd_pcm_hw_params_set_channels(pcmHandle, hwParams,
-                                              header.numChannels))) {
-      std::cout << "Failed to set channel count to " << header.numChannels
-                << ": " << snd_strerror(ret) << std::endl;
-      return;
-    }
-
-    ret = snd_pcm_hw_params_set_rate_near(
-        pcmHandle, hwParams,
-        reinterpret_cast<unsigned int*>(
-            const_cast<uint32_t*>(&header.sampleRate)),
-        0);
-    if (ret) {
-      std::cout << "Failed to set sample rate: " << snd_strerror(ret)
-                << std::endl;
-      return;
-    }
-
-    snd_pcm_nonblock(pcmHandle, 0);  // Set to blocking operation
-
-    if ((ret = snd_pcm_hw_params(pcmHandle, hwParams))) {
-      std::cout << "Failed to set hardware params: " << snd_strerror(ret)
-                << std::endl;
-      return;
-    }
+    snd_pcm_prepare(pcmHandle);
 
     // Get how many frames in a single period
     snd_pcm_uframes_t frames = 0;
     snd_pcm_hw_params_get_period_size(hwParams, &frames, 0);
 
     size_t wordSize = frames * header.numChannels * formatSize;
+    uint8_t* head = file->data() + sizeof(waveHeader);
+    size_t soundSize =
+        reinterpret_cast<uintptr_t>(file->data() + file->size()) -
+        reinterpret_cast<uintptr_t>(head);
 
-    for (uint8_t* head = file->data() + sizeof(waveHeader);
-         head < file->data() + file->size(); head += wordSize) {
+    for (size_t ii = 0; ii < soundSize / wordSize; ii++) {
       if ((ret = snd_pcm_writei(pcmHandle, head, frames)) == -EPIPE) {
-        std::cout << "XRUN encountered" << std::endl;
-        snd_pcm_prepare(pcmHandle);
+        snd_pcm_recover(pcmHandle, ret, 0);
       } else if (ret < 0) {
         std::cout << "Failed to write to PCM device: " << snd_strerror(ret)
                   << std::endl;
       }
+
+      head += wordSize;
     }
 
     snd_pcm_drain(pcmHandle);
-    snd_pcm_close(pcmHandle);
+    // snd_pcm_state_t state;
+    // do {
+    //   state = snd_pcm_state(pcmHandle);
+    //   std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    // } while (state == SND_PCM_STATE_RUNNING || state ==
+    // SND_PCM_STATE_DRAINING);
   } else {
     std::cout << "File " << path << " not loaded" << std::endl;
   }

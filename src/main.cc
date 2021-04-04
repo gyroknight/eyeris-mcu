@@ -43,7 +43,7 @@ enum LogLevel { Debug, Verbose, Normal, ErrorsOnly };
 
 // Our log level - defaulted to 'Normal' but can be modified via
 // command-line options
-LogLevel logLevel = Debug;
+LogLevel logLevel = Normal;
 }  // namespace
 
 // Our full set of logging methods (we just log to stdout)
@@ -224,7 +224,7 @@ int main(int, char*[]) {
     }
 
     if (ggkGetServerRunState() < EStopping) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
       for (uint16_t distance : distances) {
         if (distance < sensMaxDist) {
@@ -237,6 +237,8 @@ int main(int, char*[]) {
 
     if (ggkGetServerRunState() == EStopped) break;
   }
+
+  if (ggkWait()) return 1;
 
   // Return the final server health status as a success (0) or error (-1)
   return ggkGetServerHealth() == EOk ? 0 : 1;

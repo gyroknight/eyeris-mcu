@@ -41,6 +41,8 @@ class AudioController {
   snd_pcm_hw_params_t* hwParams;
   std::unordered_map<std::string, std::shared_ptr<std::vector<uint8_t>>>
       soundFiles;
+  uint16_t numChannels;
+  uint32_t sampleRate;
 };
 
 #endif  // __AUDIOCONTROLLER_H__

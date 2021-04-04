@@ -1,3 +1,6 @@
+#include <bits/stdint-uintn.h>
+
+#include <cstddef>
 #if !defined(__EYERIS_H__)
 #define __EYERIS_H__
 
@@ -23,7 +26,8 @@ class EyerisController {
   void start();
   void stop();
   uint16_t getDistance(size_t ii);
-  void setSoundSet(SoundSet soundSet);
+  void setSoundSet(SoundSet newSoundSet);
+  void enableSensor(size_t idx, bool enabled);
 
  private:
   void hapticsThreadFunc();
@@ -33,6 +37,7 @@ class EyerisController {
   void playAlert(uint8_t idx, Alert alert);
 
   std::vector<std::unique_ptr<VL53L0X>> distSensors;
+  std::vector<std::unique_ptr<std::atomic_bool>> sensorEnables;
   std::vector<std::unique_ptr<std::atomic_uint16_t>> distances;
   std::vector<Alert> lastAlert;
   std::vector<std::chrono::time_point<std::chrono::steady_clock>> lastUpdate;
@@ -43,7 +48,7 @@ class EyerisController {
   std::thread audioAlertThread;
   boost::fibers::barrier feedbackBarrier;
   AudioController audioController;
-  SoundSet soundSet;
+  std::atomic<SoundSet> soundSet;
 };
 
 #endif  // __EYERIS_H__

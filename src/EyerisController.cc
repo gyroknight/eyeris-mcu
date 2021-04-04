@@ -4,14 +4,18 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include "VL53L0X.hpp"
 
 namespace {
 // Number of distance sensors. If changed, make sure to adjust pins and
@@ -74,6 +78,7 @@ EyerisController::EyerisController()
   for (size_t ii = 0; ii < distSensors.size(); ii++) {
     distances.emplace_back(
         std::make_unique<std::atomic_uint16_t>(sensErrorDistVal));
+    sensorEnables.emplace_back(std::make_unique<std::atomic_bool>(true));
   }
 
   lastAlert.assign({None, None, None});
@@ -117,6 +122,10 @@ void EyerisController::start() {
 void EyerisController::stop() {
   std::cout << "Shutting down Eyeris" << std::endl;
   running = false;
+  for (uint8_t ii = 0; ii < numFeedback; ii++) {
+    // Trigger waits to unblock any pending threads
+    feedbackBarrier.wait();
+  }
   if (hapticsThread.joinable()) hapticsThread.join();
   if (distSenseThread.joinable()) distSenseThread.join();
   if (audioAlertThread.joinable()) audioAlertThread.join();
@@ -130,59 +139,71 @@ uint16_t EyerisController::getDistance(size_t ii) {
   }
 }
 
+void EyerisController::setSoundSet(SoundSet newSoundSet) {
+  soundSet = newSoundSet;
+}
+
+void EyerisController::enableSensor(size_t idx, bool enabled) {
+  if (idx < SENSOR_COUNT)
+    *sensorEnables[idx] = enabled;
+  else
+    std::cout << "Unknown sensor" << std::endl;
+}
+
 void EyerisController::hapticsThreadFunc() {
   while (running) {
     for (uint8_t ii = 0; ii < distances.size(); ii++) {
-      uint16_t distance = *distances[ii];
-      auto startTime = std::chrono::steady_clock::now();
       feedbackBarrier.wait();
-      if (distance < sensMaxDist) {
-        // Direction indicator
-        bool waveRunning;
-        uint8_t indicatorEffect = 64;
-        switch (ii) {
-          case 0:
-            indicatorEffect = 4;  // Sharp click, 100%
-            break;
-          case 1:
-            indicatorEffect = 10;  // Double click, 100%;
-            break;
-          case 2:
-            indicatorEffect = 12;  // Triple click, 100%
-            break;
-          default:
-            std::cout << "Unsupported sensor " << ii << std::endl;
-        }
-        haptics.setWaveform(indicatorEffect, 0);
-        haptics.setWaveform(50, 1,
-                            true);  // wait 500ms before starting distance wave
-        haptics.setWaveform(0, 2);
-        haptics.startPlayback();
-        do {
-          waveRunning = haptics.isPlaying();
-          std::this_thread::sleep_for(std::chrono::microseconds(1));
-        } while (waveRunning);
-
-        while (std::chrono::duration_cast<std::chrono::seconds>(
-                   std::chrono::steady_clock::now() - startTime)
-                       .count() < 4 &&
-               distance < sensMaxDist) {
-          distance = std::max(distance, sensMinDist);
-          haptics.setPulseWave((distance - sensMinDist) * maxDelay /
-                               (sensMaxDist - sensMinDist));
+      if (*sensorEnables[ii]) {
+        uint16_t distance = *distances[ii];
+        auto startTime = std::chrono::steady_clock::now();
+        if (distance < sensMaxDist) {
+          // Direction indicator
+          bool waveRunning;
+          uint8_t indicatorEffect = 64;
+          switch (ii) {
+            case 0:
+              indicatorEffect = 4;  // Sharp click, 100%
+              break;
+            case 1:
+              indicatorEffect = 10;  // Double click, 100%;
+              break;
+            case 2:
+              indicatorEffect = 12;  // Triple click, 100%
+              break;
+            default:
+              std::cout << "Unsupported sensor " << ii << std::endl;
+          }
+          haptics.setWaveform(indicatorEffect, 0);
+          haptics.setWaveform(
+              50, 1,
+              true);  // wait 500ms before starting distance wave
+          haptics.setWaveform(0, 2);
           haptics.startPlayback();
           do {
             waveRunning = haptics.isPlaying();
-            std::this_thread::sleep_for(std::chrono::microseconds(1));
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
           } while (waveRunning);
 
-          distance = *distances[ii];  // Fetch new distance info
-        }
+          while (std::chrono::duration_cast<std::chrono::seconds>(
+                     std::chrono::steady_clock::now() - startTime)
+                         .count() < 4 &&
+                 distance < sensMaxDist) {
+            distance = std::max(distance, sensMinDist);
+            haptics.setPulseWave((distance - sensMinDist) * maxDelay /
+                                 (sensMaxDist - sensMinDist));
+            haptics.startPlayback();
+            do {
+              waveRunning = haptics.isPlaying();
+              std::this_thread::sleep_for(std::chrono::microseconds(500));
+            } while (waveRunning);
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(
-            500));  // wait 500ms before moving to next direction
-      } else {
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
+            distance = *distances[ii];  // Fetch new distance info
+          }
+
+          std::this_thread::sleep_for(std::chrono::milliseconds(
+              500));  // wait 500ms before moving to next direction
+        }
       }
     }
   }
@@ -191,23 +212,25 @@ void EyerisController::hapticsThreadFunc() {
 void EyerisController::distSenseThreadFunc() {
   while (running) {
     for (size_t ii = 0; ii < distSensors.size(); ii++) {
-      uint16_t distance;
-      try {
-        distance = distSensors[ii]
-                       ? distSensors[ii]->readRangeContinuousMillimeters()
-                       : sensErrorDistVal;
-      } catch (const std::exception& error) {
-        std::cerr << "Failed to read sensor " << ii
-                  << " with reason: " << error.what();
-        distance = sensErrorDistVal;
-      }
+      if (*sensorEnables[ii]) {
+        uint16_t distance;
+        try {
+          distance = distSensors[ii]
+                         ? distSensors[ii]->readRangeContinuousMillimeters()
+                         : sensErrorDistVal;
+        } catch (const std::exception& error) {
+          std::cerr << "Failed to read sensor " << ii
+                    << " with reason: " << error.what();
+          distance = sensErrorDistVal;
+        }
 
-      if (distance == sensErrorDistVal)
-        continue;
-      else if (distSensors[ii]->timeoutOccurred())
-        std::cerr << "Timeout occurred on sensor " << ii;
-      else
-        *distances[ii] = distance;
+        if (distance == sensErrorDistVal)
+          continue;
+        else if (distSensors[ii]->timeoutOccurred())
+          std::cerr << "Timeout occurred on sensor " << ii;
+        else
+          *distances[ii] = distance;
+      }
     }
 
     std::this_thread::sleep_for(std::chrono::microseconds(500));
@@ -229,18 +252,20 @@ void EyerisController::audioAlertThreadFunc() {
 
   while (running) {
     for (uint8_t ii = 0; ii < distances.size(); ii++) {
-      uint16_t distance = *distances[ii];
       feedbackBarrier.wait();
-      Alert nextAlert = getAlert(distance);
-      if (nextAlert != None &&
-          (nextAlert != lastAlert[ii] ||
-           std::chrono::duration_cast<std::chrono::seconds>(
-               std::chrono::steady_clock::now() - lastUpdate[ii])
-                   .count() < 5)) {
-        playAlert(ii, nextAlert);
-      }
+      if (*sensorEnables[ii]) {
+        uint16_t distance = *distances[ii];
+        Alert nextAlert = getAlert(distance);
+        if (nextAlert != None &&
+            (nextAlert != lastAlert[ii] ||
+             std::chrono::duration_cast<std::chrono::seconds>(
+                 std::chrono::steady_clock::now() - lastUpdate[ii])
+                     .count() > 5)) {
+          playAlert(ii, nextAlert);
+        }
 
-      lastAlert[ii] = nextAlert;
+        lastAlert[ii] = nextAlert;
+      }
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
