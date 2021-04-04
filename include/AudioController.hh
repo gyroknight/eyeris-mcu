@@ -31,7 +31,7 @@ class AudioController {
   AudioController();
   ~AudioController();
 
-  void play(const std::string& path);
+  void playFile(const std::string& path);
   int loadFile(const std::string& path);
 
  private:
