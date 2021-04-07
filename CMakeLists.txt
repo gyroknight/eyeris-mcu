@@ -9,7 +9,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Threads REQUIRED)
 find_package(ALSA REQUIRED)
-find_package(Boost REQUIRED COMPONENTS fiber)
 
 add_subdirectory(drv2605l)
 add_subdirectory(gobbledegook)
@@ -20,11 +19,12 @@ target_include_directories(eyeris PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_sources(eyeris
     PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/AudioController.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/Barrier.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/EyerisController.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cc"
 )
 
-target_link_libraries(eyeris drv2605l-user-driver ggk vl53l0x Threads::Threads wiringPi ALSA::ALSA Boost::fiber)
+target_link_libraries(eyeris drv2605l-user-driver ggk vl53l0x Threads::Threads wiringPi ALSA::ALSA)
 
 target_compile_options(eyeris
     PUBLIC -Wall

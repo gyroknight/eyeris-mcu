@@ -1,16 +1,15 @@
-#include <bits/stdint-uintn.h>
-
-#include <cstddef>
 #if !defined(__EYERIS_H__)
 #define __EYERIS_H__
 
 #include <atomic>
-#include <boost/fiber/barrier.hpp>
 #include <chrono>
+#include <condition_variable>
+#include <cstddef>
 #include <thread>
 #include <vector>
 
 #include "AudioController.hh"
+#include "Barrier.hh"
 #include "VL53L0X.hpp"
 #include "drv2605lDriver.hh"
 
@@ -47,7 +46,7 @@ class EyerisController {
   std::thread hapticsThread;
   std::thread distSenseThread;
   std::thread audioAlertThread;
-  boost::fibers::barrier feedbackBarrier;
+  Barrier feedbackBarrier;
   AudioController audioController;
   std::atomic<SoundSet> soundSet;
 };

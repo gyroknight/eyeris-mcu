@@ -122,13 +122,11 @@ void EyerisController::start() {
 void EyerisController::stop() {
   std::cout << "Shutting down Eyeris" << std::endl;
   running = false;
-  for (uint8_t ii = 0; ii < numFeedback; ii++) {
-    // Trigger waits to unblock any pending threads
-    feedbackBarrier.wait();
-  }
+  // Trigger waits to unblock any pending threads
+  feedbackBarrier.release();
   if (hapticsThread.joinable()) hapticsThread.join();
-  if (distSenseThread.joinable()) distSenseThread.join();
   if (audioAlertThread.joinable()) audioAlertThread.join();
+  if (distSenseThread.joinable()) distSenseThread.join();
 }
 
 uint16_t EyerisController::getDistance(size_t ii) {
@@ -167,6 +165,7 @@ void EyerisController::hapticsThreadFunc() {
   while (running) {
     for (uint8_t ii = 0; ii < distances.size(); ii++) {
       feedbackBarrier.wait();
+      if (!running) return;
       if (*sensorEnables[ii]) {
         uint16_t distance = *distances[ii];
         auto startTime = std::chrono::steady_clock::now();
@@ -250,7 +249,7 @@ void EyerisController::distSenseThreadFunc() {
   }
 
   for (std::unique_ptr<VL53L0X>& ss : distSensors) {
-    ss->stopContinuous();
+    if (ss) ss->stopContinuous();
   }
 }
 
@@ -266,6 +265,7 @@ void EyerisController::audioAlertThreadFunc() {
   while (running) {
     for (uint8_t ii = 0; ii < distances.size(); ii++) {
       feedbackBarrier.wait();
+      if (!running) return;
       if (*sensorEnables[ii]) {
         uint16_t distance = *distances[ii];
         Alert nextAlert = getAlert(distance);
