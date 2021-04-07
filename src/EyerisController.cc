@@ -143,6 +143,19 @@ void EyerisController::setSoundSet(SoundSet newSoundSet) {
   soundSet = newSoundSet;
 }
 
+SoundSet EyerisController::numToSoundSet(int num) {
+  switch (num) {
+    case 0:
+      return Default;
+    case 1:
+      return Variant1;
+      break;
+    default:
+      std::cout << "Unrecognized SoundSet value" << std::endl;
+      return Default;
+  }
+}
+
 void EyerisController::enableSensor(size_t idx, bool enabled) {
   if (idx < SENSOR_COUNT)
     *sensorEnables[idx] = enabled;

@@ -7,7 +7,9 @@
 #include <csignal>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <sstream>
+#include <string>
 #include <thread>
 
 #include "EyerisController.hh"
@@ -34,6 +36,9 @@ static std::array<uint16_t, SENSOR_COUNT> distances{sensMaxDist, sensMaxDist,
                                                     sensMaxDist};
 static std::stringstream alertStream;
 static std::string alertString;
+static std::stringstream settingsStream;
+static std::string settingsString;
+static std::mutex rxMutex;
 
 //
 // Logging
@@ -127,6 +132,7 @@ const void* dataGetter(const char* pName) {
     }
 
     // TODO: Add battery reading info
+    alertStream << 98;  // Fake battery
     alertString = alertStream.str();
     return alertString.c_str();
   }
@@ -160,7 +166,10 @@ int dataSetter(const char* pName, const void* pData) {
 
   if (strName == "uart_rx") {
     const char* dataStr = static_cast<const char*>(pData);
-    LogDebug((std::string("Server received: ") + std::string(dataStr)).c_str());
+    rxMutex.lock();
+    settingsString = dataStr;
+    rxMutex.unlock();
+    LogDebug((std::string("Server received: ") + settingsString).c_str());
     return 1;
   }
 
@@ -234,6 +243,24 @@ int main(int, char*[]) {
         }
       }
     }
+
+    // Update settings
+    rxMutex.lock();
+    if (!settingsString.empty()) {
+      std::stringstream(settingsString).swap(settingsStream);
+      bool enable;
+      for (short ii = 0; ii < SENSOR_COUNT; ii++) {
+        settingsStream >> enable;
+        controller.enableSensor(ii, enable);
+      }
+
+      int soundSetVal;
+      settingsStream >> soundSetVal;
+
+      controller.setSoundSet(controller.numToSoundSet(soundSetVal));
+      settingsString.clear();
+    }
+    rxMutex.unlock();
 
     if (ggkGetServerRunState() == EStopped) break;
   }

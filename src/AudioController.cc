@@ -27,39 +27,7 @@ constexpr int waveChunkHdrSize = 8;
 
 AudioController::AudioController()
     : pcmHandle(nullptr), hwParams(nullptr), numChannels(0), sampleRate(0) {
-  int ret;
-  if ((ret = snd_pcm_open(&pcmHandle, pcmDevice, SND_PCM_STREAM_PLAYBACK, 0))) {
-    std::cout << "Failed to open PCM handle: " << snd_strerror(ret)
-              << std::endl;
-    return;
-  }
-  if ((ret = snd_pcm_nonblock(pcmHandle, 0))) {
-    std::cout << "Failed to set PCM to blocking mode: " << snd_strerror(ret)
-              << std::endl;
-    return;
-  }
-
   snd_pcm_hw_params_malloc(&hwParams);
-
-  if ((ret = snd_pcm_hw_params_any(pcmHandle, hwParams))) {
-    std::cout << "Failed to fill params for PCM: " << snd_strerror(ret)
-              << std::endl;
-    return;
-  }
-
-  if ((ret = snd_pcm_hw_params_set_access(pcmHandle, hwParams,
-                                          SND_PCM_ACCESS_RW_INTERLEAVED))) {
-    std::cout << "Failed to interleaved mode: " << snd_strerror(ret)
-              << std::endl;
-    return;
-  }
-
-  if ((ret =
-           snd_pcm_hw_params_set_format(pcmHandle, hwParams, defaultFormat))) {
-    std::cout << "Failed to set sound format to s16l: " << snd_strerror(ret)
-              << std::endl;
-    return;
-  }
 }
 
 AudioController::~AudioController() {
@@ -74,6 +42,43 @@ void AudioController::playFile(const std::string& path) {
     int ret;
 
     if (numChannels != header.numChannels || sampleRate != header.sampleRate) {
+      if (pcmHandle) {
+        if ((ret = snd_pcm_close(pcmHandle))) {
+          std::cout << "Failed to close PCM handle: " << snd_strerror(ret)
+                    << std::endl;
+          return;
+        }
+      }
+      if ((ret = snd_pcm_open(&pcmHandle, pcmDevice, SND_PCM_STREAM_PLAYBACK,
+                              0))) {
+        std::cout << "Failed to open PCM handle: " << snd_strerror(ret)
+                  << std::endl;
+        return;
+      }
+      if ((ret = snd_pcm_nonblock(pcmHandle, 0))) {
+        std::cout << "Failed to set PCM to blocking mode: " << snd_strerror(ret)
+                  << std::endl;
+        return;
+      }
+      if ((ret = snd_pcm_hw_params_any(pcmHandle, hwParams))) {
+        std::cout << "Failed to fill params for PCM: " << snd_strerror(ret)
+                  << std::endl;
+        return;
+      }
+
+      if ((ret = snd_pcm_hw_params_set_access(pcmHandle, hwParams,
+                                              SND_PCM_ACCESS_RW_INTERLEAVED))) {
+        std::cout << "Failed to interleaved mode: " << snd_strerror(ret)
+                  << std::endl;
+        return;
+      }
+
+      if ((ret = snd_pcm_hw_params_set_format(pcmHandle, hwParams,
+                                              defaultFormat))) {
+        std::cout << "Failed to set sound format to s16l: " << snd_strerror(ret)
+                  << std::endl;
+        return;
+      }
       if ((ret = snd_pcm_hw_params_set_channels(pcmHandle, hwParams,
                                                 header.numChannels))) {
         std::cout << "Failed to set channel count to " << header.numChannels

@@ -27,6 +27,7 @@ class EyerisController {
   void stop();
   uint16_t getDistance(size_t ii);
   void setSoundSet(SoundSet newSoundSet);
+  static SoundSet numToSoundSet(int num);
   void enableSensor(size_t idx, bool enabled);
 
  private:
