@@ -41,13 +41,18 @@ const std::vector<std::string> soundFilenames{
 const std::vector<std::string> soundFilenames1{
     "resources/1.5m_1.wav", "resources/2m_1.wav", "resources/above_1.wav",
     "resources/left_1.wav", "resources/right_1.wav"};
+const std::vector<std::string> soundFilenames2{
+    "resources/1.5m_2.wav", "resources/2m_2.wav", "resources/above_2.wav",
+    "resources/left_2.wav", "resources/right_2.wav"};
 constexpr size_t oneFiveMSoundIdx = 0;
 constexpr size_t twoMSoundIdx = 1;
 constexpr size_t aboveSoundIdx = 2;
 constexpr size_t leftSoundIdx = 3;
 constexpr size_t rightSoundIdx = 4;
 std::unordered_map<SoundSet, std::vector<std::string>> soundFilenamesMap{
-    {Default, soundFilenames}, {Variant1, soundFilenames1}};
+    {Default, soundFilenames},
+    {Variant1, soundFilenames1},
+    {Variant2, soundFilenames2}};
 }  // namespace
 
 EyerisController::EyerisController()
@@ -147,7 +152,8 @@ SoundSet EyerisController::numToSoundSet(int num) {
       return Default;
     case 1:
       return Variant1;
-      break;
+    case 2:
+      return Variant2;
     default:
       std::cout << "Unrecognized SoundSet value" << std::endl;
       return Default;
@@ -262,6 +268,10 @@ void EyerisController::audioAlertThreadFunc() {
     audioController.loadFile(filename);
   }
 
+  for (const std::string& filename : soundFilenames2) {
+    audioController.loadFile(filename);
+  }
+
   while (running) {
     for (uint8_t ii = 0; ii < distances.size(); ii++) {
       feedbackBarrier.wait();
@@ -274,6 +284,7 @@ void EyerisController::audioAlertThreadFunc() {
              std::chrono::duration_cast<std::chrono::seconds>(
                  std::chrono::steady_clock::now() - lastUpdate[ii])
                      .count() > 5)) {
+          if ((ii == 0 || ii == 2) && distance < 1000) continue;
           playAlert(ii, nextAlert);
         }
 

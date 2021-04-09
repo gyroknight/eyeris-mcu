@@ -13,7 +13,7 @@
 #include "VL53L0X.hpp"
 #include "drv2605lDriver.hh"
 
-enum SoundSet { Default, Variant1 };
+enum SoundSet { Default, Variant1, Variant2 };
 
 enum Alert { None, OneFiveM, TwoM };
 
